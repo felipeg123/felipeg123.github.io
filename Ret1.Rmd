@@ -1,0 +1,401 @@
+---
+title: "Retention strategy Telc. Part II"
+author: "Felipe Gonzalez. ID 11246645"
+output:
+  pdf_document: default
+  html_document: default
+---
+## Variable selection and data preparation
+In order to clean the data from missing values and prepare the set for a better performance these steps were followed:  
+
+**i)** *Unlimited text* was removed since all customers have this service.  
+**ii)** Similarly to Part I, the NAs in the variables *Number is over data/voice* was the same number of NAs in *Time since last over data/voice*. It corresponds to those clients which have not gotten over voice/data. Thus, NAs on these 4 variables were replaced by 0; In the case of number of times, because the clients just had not experienced this issue and in the case of the time, because this makes sense as an interaction variable where only clients who experienced this issue have a value in this column.  
+**iii)** The NAs on variables *Cash down* and *Phone balance* were replaced by 0 for customers in the *Bring* and *Buy* categories (*Rent* did not have NAs). In the case of *Bring* because they had not payd for their phones and in the case of *Buy* because customers had already paid in full for their phone.  
+**iv)** The NAs on *Phone price* belonged only to the *Bring* category and thus they were replaced by 0 since this segment of clients was not paying for their phones.  
+**v)** Lastly, NAs in the variale *Minutes voice* which corresponded to clients with unlimited minutes were replaced by 0 as well. This makes sence as an interaction variable since there is not a way to put unlimited or infinite minutes numerically.
+
+### Client targeting strategy
+To better understand the effect of the previous marketing campaign (Pilot), two separate datasets were created for clients belonging and not belongint to that pilot. The analysis was completed with uplift modeling, in which the best performing model was chosen for each of the two scenarios. Then I computed the *uplift* : P. churn (if not invited) -  P. churn (if invited). Then, we want the clients with highest uplift as they are more likely to live company if not invited. However we want to prioritize those clients with higher monthly rates as they are more valuable for the company. In that sense, the expected revenue was calculated as :*uplift***monthly rate for plan*. The final selection was based on the 8,000 individuals with the highest expected revenue.
+
+### Definition of models
+To develope the models, the data set (train.csv) was randomly splited between traiining and validation (75% and 25% respectively). With the purpose of identifying clients more likely to leave the company, different logistic regression models were tried as well as random forest and trees. All in both sets: Pilot and No Pilot.
+
+**M1** : Linear regression with full model ; **M2**: Stepwise selection from model 1; **M3**: Full model with interactions and quadratic powers; The variables selected were those chosen by the stepwise model (model2) plus some additional variables (and its iteractions) that incremented the AUC on the validation set. **M4**: Random forest with 500 trees. **M5** Tree with optimal size according to AUC on the validaion set.The ranking of methods on the pilot training set was the following: M3 (0.723), M2 (0.712), M1 (0.712), M4(0.681), M5(0.695).The ranking of methods on the no-pilot training set was the following: M3 (0.719), M1 (0.706), M2 (0.706), M4(0.656) M5(0.722).
+
+## Model selection
+Since the AUC of models 3 and 5 was the highest considering both scenarios (Pilot, No pilot) those models were re-run in the entire training set. The selection criteria for the models in the uplift was the Net profit on the test set shown in the platform. The best combination turned out to be **Model 3 No pilot** - **Model 3 pilot**. 
+
+
+```{r setup, include=FALSE}
+library(tidyverse,verbose=FALSE)
+library(rpart,verbose=FALSE)
+library("knitr",verbose=FALSE)
+library("markdown",verbose=FALSE)
+library("rmarkdown",verbose=FALSE)
+options(tinytex.verbose = TRUE)
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Reading the files and exploring the data
+setwd("C:/Users/Owner/Desktop/Statistical Learning/Assignment 2")
+retentiontrain=read.csv("Retention-train_fixed.csv")
+#score=read.csv("Retention-score-fixed.csv")
+```
+
+```{r,include=FALSE, eval=FALSE }
+#Can we delete unlimited text / unlimited voice?
+#Yes, we can delete unlimited text
+
+retentiontrain %>%
+  filter(unlimitedText!=1) %>%
+  nrow() 
+retentiontrain %>%
+  filter(unlimitedVoice!=1) %>%
+  nrow() 
+```
+
+```{r,include=FALSE, eval=FALSE}
+#Is chrono related to lifetime?
+#Yes,indeed. Chrono tells the month of arrival and lifetime the number of months since arrival
+
+retentiontrain %>%
+  filter(chrono+lifeTime!=118) %>%
+  nrow() 
+```
+
+```{r,include=FALSE, eval=FALSE}
+#Is number of technical problems same as number of complaints?
+#No, they are not the same
+
+retentiontrain %>%
+  filter(nbrComplaints==nbrTechnicalProblems) %>%
+  nrow() 
+```
+
+```{r}
+#How many people have not gone overvoice/overdata?
+#Yes, It is consistent with NAs on time since last overvoice/overdata
+retentiontrain %>%
+  filter(nbrIsOverVoice==0) %>%
+  nrow() 
+
+retentiontrain %>%
+  filter(nbrIsOverData==0) %>%
+  nrow() 
+
+summary(retentiontrain)
+```
+
+```{r}
+#How many values for nbr of times over data and number of times over voice
+retentiontrain %>%
+  filter(nbrIsOverData>0) %>%
+  nrow() 
+retentiontrain %>%
+  filter(nbrIsOverVoice>0) %>%
+  nrow() 
+```
+
+```{r}
+#Is phone price, phone balance and cash down consistent with telephone plan
+retentiontrain %>%
+  filter(planType=="rent" & (cashDown>0)) %>%
+  nrow() 
+retentiontrain %>%
+  filter(planType=="rent"& (phonePrice>0)) %>%
+  nrow() 
+retentiontrain %>%
+  filter(planType=="rent"& (phoneBalance>0)) %>%
+  nrow() 
+```
+
+```{r ,include=FALSE, eval=FALSE}
+#Replace NAs in phone price, phone balance, time since last complaints and time since last technical problems with 0
+
+retentiontrain$phoneBalance[is.na(retentiontrain$phoneBalance)] <- 0
+retentiontrain$phonePrice[is.na(retentiontrain$phonePrice)] <- 0
+retentiontrain$cashDown[is.na(retentiontrain$cashDown)] <- 0
+retentiontrain$timeSinceLastComplaints[is.na(retentiontrain$timeSinceLastComplaints)] <- 117
+retentiontrain$timeSinceLastTechProb[is.na(retentiontrain$timeSinceLastTechProb)] <- 117
+retentiontrain$timeSinceLastIsOverData[is.na(retentiontrain$timeSinceLastIsOverData)] <- 117
+retentiontrain$timeSinceLastIsOverVoice[is.na(retentiontrain$timeSinceLastIsOverVoice)] <- 117
+retentiontrain$minutesVoice[is.na(retentiontrain$minutesVoice)] <- 0
+```
+
+```{r ,include=FALSE,eval=FALSE}
+#Given the above, we can disregard the following variables
+Cleantrain=retentiontrain %>%
+  select(-unlimitedText)
+
+```
+
+```{r,}
+# Are there are missing values on this data set 
+apply(is.na(Cleantrain),2,sum)
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Training set of clients out of the pilot
+retentiontrainnp=Cleantrain %>%
+  filter(promo==0)
+
+# Delete random rows where churn is equal to 1
+totalchurn = sum(retentiontrainnp$churnIn3Month==1)
+
+(churnindex <- which(retentiontrainnp$churnIn3Month == 1))
+(deleteindex <- sample(churnindex, length(churnindex) - totalchurn*0.92)) 
+retentiontrainnp = retentiontrainnp[-deleteindex, ]
+```
+
+```{r, include=FALSE,eval=FALSE }
+# Set of clients in the pilot
+retentiontrainpilot=Cleantrain %>%
+  filter(promo==1)
+summary(retentiontrainpilot)
+```
+
+```{r ,include=FALSE,eval=FALSE}
+#Training and validation sets from no pilot
+set.seed(20606)
+trainingIDNP=sample(1:nrow(retentiontrainnp),nrow(retentiontrainnp)*0.7)
+trainingNP=retentiontrainnp[trainingIDNP,]
+validationNP=retentiontrainnp[-trainingIDNP,]
+```
+
+```{r ,include=FALSE,eval=FALSE}
+#Training and validation sets from pilot
+set.seed(20606)
+trainingIDP=sample(1:nrow(retentiontrainpilot),nrow(retentiontrainpilot)*0.7)
+trainingPILOT=retentiontrainpilot[trainingIDP,]
+validationPILOT=retentiontrainpilot[-trainingIDP,]
+```
+
+```{r,include=FALSE,eval=FALSE }
+#Compares mean churn in pilot and no pilot
+churnNP = mean(trainingNP$churnIn3Month)
+churnPILOT = mean(trainingPILOT$churnIn3Month)
+```
+
+```{r ,include=FALSE,eval=FALSE}
+#Model 1: Full linear regression
+model1P=glm(churnIn3Month~.-ID-IDfamily-promo,family="binomial",data=retentiontrainpilot)
+model1NP=glm(churnIn3Month~.-ID-IDfamily-promo,family="binomial",data=retentiontrainnp)
+```
+
+```{r ,include=FALSE,eval=FALSE}
+#Model 2: stepwise of model 1
+model2P=step(model1P,trace=FALSE)
+model2NP=step(model1NP,trace=FALSE)
+```
+
+```{r,include=FALSE,eval=FALSE}
+#In order to create interations. Changing order of variables to leave the numeric variables last We put these variables at the begining since it doesnt make sense to multiply them
+
+Cleantrainplus=Cleantrain %>%
+  select(churnIn3Month,promo,ID,IDfamily,isWorkPhone,planType,unlimitedVoice,phonePrice,baseMonthlyRateForPlan,phoneBalance,baseMonthlyRateForPhone,timeSinceLastTechProb,nbrTechnicalProblems,timeSinceLastComplaints,nbrComplaints,nbAdultAvg,chrono,age,data,nbrIsOverData,timeSinceLastIsOverData,voiceAvgConsumption,nbrIsOverVoice,timeSinceLastIsOverVoice,textoAvgConsumption)
+
+for(i in 8:25){
+  for(j in i:25){
+    Cleantrainplus = Cleantrainplus %>%
+      mutate(!!paste(names(Cleantrainplus)[[i]],names(Cleantrainplus)[[j]],sep="_"):=as.numeric(Cleantrainplus[[i]])*Cleantrainplus[[j]])
+  }
+}
+```
+
+```{r,include=FALSE, eval=FALSE}
+# We need to create a plus size set for training and validation
+retentiontrainNOPPLUS=Cleantrainplus %>%
+  filter(promo==0)
+
+retentiontrainPILOTPLUS=Cleantrainplus %>%
+  filter(promo==1)
+```
+
+```{r,include=FALSE, eval=FALSE}
+trainingPILOTPLUS=retentiontrainPILOTPLUS[trainingIDP,]
+validationPILOTPLUS=retentiontrainPILOTPLUS[-trainingIDP,]
+
+trainingNPPLUS=retentiontrainNOPPLUS[trainingIDNP,]
+validationNPPLUS=retentiontrainNOPPLUS[-trainingIDNP,]
+```
+
+```{r,include=FALSE, eval=FALSE}
+#Model number 3: using interactions and powers from certain variables
+model3P=glm(churnIn3Month~.-ID-IDfamily-promo-isWorkPhone-phonePrice,family="binomial",data=retentiontrainPILOTPLUS)
+model3NP=glm(churnIn3Month~.-ID-IDfamily-promo-timeSinceLastIsOverData-nbrIsOverVoice-timeSinceLastIsOverVoice-baseMonthlyRateForPhone-data-textoAvgConsumption,family="binomial",data=retentiontrainNOPPLUS)
+```
+
+```{r , include=FALSE,eval=FALSE}
+source("Theme6-functionsF.R")
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Model 4 Random forest
+library(randomForest,verbose=FALSE)
+model4P = randomForest(churnIn3Month~.-ID-IDfamily-promo,do.trace=TRUE,data=trainingPILOT)
+model4NP = randomForest(churnIn3Month~.-ID-IDfamily-promo,do.trace=TRUE,data=trainingNP)
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Model 5 tree
+library(rpart)                  # Popular decision tree algorithm
+library(rpart.plot)             # Enhanced tree plots
+#No need to prun
+model5NP=rpart(churnIn3Month~.-ID-IDfamily-promo,data=retentiontrainp,control=rpart.control(maxdepth=10, cp=-1))
+
+model5P=rpart(churnIn3Month~.-ID-IDfamily-promo,data=trainingPILOT,control=rpart.control(maxdepth=10, cp=-1))
+
+listcp=model5P$cptable[,1]
+auc=NULL
+for(i in 2:length(listcp)){
+  t3=prune(model5P,cp=listcp[i])
+  pv=predict(t3,validationPILOT)[,2]
+  auc=c(auc,roc(validationPILOT$churnIn3Month,pv,plot=FALSE)$AUC)
+}
+
+plot(model5NP$cptable[,2]+1,auc,type='l',ylab="AUC",xlab="Number of leaves",lwd=2)
+points(model5NP$cptable[which.max(auc),2]+1,max(auc),col="red",pch=20,lwd=4)
+
+maxP = model5NP$cptable[which.max(auc),2]
+
+model5Ppruned=rpart(churnIn3Month~.-ID-IDfamily-promo,data=retentiontrainpilot,control=rpart.control(cp=model5P$cptable[which.max(auc),1]))
+```
+
+```{r ,include=FALSE,eval=FALSE}
+# Making predictions with model the 3 first models and sorting the top 20% by probability
+pred1P=predict(model1P,newdata=validationPILOT,type="response")
+pred2P=predict(model2P,newdata=validationPILOT,type="response")
+pred3P=predict(model3P,newdata=validationPILOTPLUS,type="response")
+pred4P=predict(model4P,validationPILOT,type="prob")[,2]
+pred5P=predict(model5P,newdata=validationPILOT)[,2]
+pred5Ppruned=predict(model5Ppruned,newdata=validationPILOT)[,2]
+
+pred1NP=predict(model1NP,newdata=validationNP,type="response")
+pred2NP=predict(model2NP,newdata=validationNP,type="response")
+pred3NP=predict(model3NP,newdata=validationNPPLUS,type="response")
+pred4NP=predict(model4NP,validationNP,type="prob")[,2]
+pred5NP=predict(model5NP,newdata=validationNP)[,2]
+```
+
+
+```{r ,include=FALSE,eval=FALSE}
+#These four models are evaluated based on the AIC criterion
+ROC1P=roc(validationPILOT$churnIn3Month,pred1P)$AUC
+ROC2P=roc(validationPILOT$churnIn3Month,pred2P)$AUC
+ROC3P=roc(validationPILOT$churnIn3Month,pred3P)$AUC
+ROC4P=roc(validationPILOT$churnIn3Month,pred4P)$AUC
+ROC5P=roc(validationPILOT$churnIn3Month,pred5P)$AUC
+ROC5Pprun=roc(validationPILOT$churnIn3Month,pred5Ppruned)$AUC
+
+ROC1NP=roc(validationNP$churnIn3Month,pred1NP)$AUC
+ROC2NP=roc(validationNP$churnIn3Month,pred2NP)$AUC
+ROC3NP=roc(validationNP$churnIn3Month,pred3NP)$AUC
+ROC4NP=roc(validationNP$churnIn3Month,pred4NP)$AUC
+ROC5NP=roc(validationNP$churnIn3Month,pred5NP)$AUC
+ROC5NPprun=roc(validationNP$churnIn3Month,pred5NPpruned)$AUC
+```
+
+```{r,include=FALSE, eval=FALSE}
+#Replace NAs on the test set 
+score$phoneBalance[is.na(score$phoneBalance)] <- 0
+score$phonePrice[is.na(score$phonePrice)] <- 0
+score$cashDown[is.na(score$cashDown)] <- 0
+score$timeSinceLastComplaints[is.na(score$timeSinceLastComplaints)] <- 0
+score$timeSinceLastTechProb[is.na(score$timeSinceLastTechProb)] <- 0
+score$timeSinceLastIsOverData[is.na(score$timeSinceLastIsOverData)] <- 0
+score$timeSinceLastIsOverVoice[is.na(score$timeSinceLastIsOverVoice)] <- 0
+score$minutesVoice[is.na(score$minutesVoice)] <- 0
+
+apply(is.na(score),2,sum)
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Score set on a plus side
+scoreplus=score %>%
+  select(ID,IDfamily,isWorkPhone,planType,unlimitedVoice,phonePrice,baseMonthlyRateForPlan,phoneBalance,baseMonthlyRateForPhone,timeSinceLastTechProb,nbrTechnicalProblems,timeSinceLastComplaints,nbrComplaints,nbAdultAvg,chrono,age,data,nbrIsOverData,timeSinceLastIsOverData,voiceAvgConsumption,nbrIsOverVoice,timeSinceLastIsOverVoice,textoAvgConsumption)
+
+for(i in 6:23){
+  for(j in i:23){
+    scoreplus = scoreplus %>%
+      mutate(!!paste(names(scoreplus)[[i]],names(scoreplus)[[j]],sep="_"):=as.numeric(scoreplus[[i]])*scoreplus[[j]])
+  }
+}
+scoreplus=scoreplus %>%
+  mutate(promo = 2)
+
+score=score %>%
+  mutate(promo = 2)
+
+scoreplus=scoreplus %>%
+  filter(baseMonthlyRateForPlan>10)
+
+#apply(is.na(scoreplus),2,sum)
+```
+
+```{r , include=FALSE,eval=FALSE}
+# Run models in score set and multiply by revenue
+pred3NPs=predict(model3NP,newdata=scoreplus,type="response")
+pred3Ps=predict(model3P,newdata=scoreplus,type="response")
+pred2NPs=predict(model2NP,newdata=scoreplus,type="response")
+
+upliftm3=pred3NPs-pred3Ps
+
+scoreplus=cbind(upliftm3,scoreplus)
+
+scoreplus=scoreplus %>%
+  mutate(Expectedrev = upliftm3*(baseMonthlyRateForPlan))
+
+scoreplus = scoreplus %>%
+  group_by(IDfamily)%>%
+  mutate(number =(n()))
+
+scoreplus = scoreplus %>%
+  filter(number <= 1)
+
+scoreplus <- scoreplus[with(scoreplus,order(-Expectedrev)),]
+Toprev <- (scoreplus$IDfamily)
+
+# Write CSV in R
+write.table(Toprev[1:8000],file = "Model3up.csv",quote=F,row.names=F,col.names=FALSE, sep=",")
+
+```
+
+```{r,include=FALSE, eval=FALSE}
+pred5NPs=predict(model5NP,newdata=score)[,2]
+pred5Ps=predict(model5Ppruned,newdata=score)[,2]
+
+upliftm5=pred3NPs-pred5Ps
+
+scoreplus=cbind(upliftm5,score)
+
+score=score %>%
+  mutate(Expectedrev = upliftm5*(baseMonthlyRateForPlan))
+
+score = score %>%
+  group_by(IDfamily)%>%
+  mutate(number =(n()))
+
+score = score %>%
+  filter(number <= 1)
+
+score <- score[with(score,order(-Expectedrev)),]
+Toprev <- (score$IDfamily)
+
+# Write CSV in R
+write.table(Toprev[1:8000],file = "Model5up.csv",quote=F,row.names=F,col.names=FALSE, sep=",")
+```
+
+```{r,include=FALSE, eval=FALSE}
+# Uplift modeling 
+pred3Pscore=predict(model3P,newdata=scoreplus,type="response")
+pred3NPscore=predict(model3NP,newdata=scoreplus,type="response")
+
+uplift=pred3Pscore-pred3NPscore
+colup=colorRampPalette(c("Red","Green"))
+plot(pred3NPscore,pred3Pscore,xlab="Prob(churn) no pilot",ylab="Prob(churn) with pilot",xlim=0:1,ylim=0:1,col=colup(100)[ceiling(100*(uplift+1)/2)],pch=20)
+abline(a=0,b=1,lty=2)
+```
+
+```{r, include=FALSE,eval=FALSE}
+render("Ret1.Rmd","pdf_document")
+```
